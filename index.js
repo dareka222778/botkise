@@ -1,6 +1,8 @@
 import { Client, GatewayIntentBits } from "discord.js";
 import http from "http";
 
+console.log("Iniciando processo...");
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -10,27 +12,22 @@ const client = new Client({
 });
 
 client.once("ready", () => {
-  console.log(`Conectado como ${client.user.tag}`);
+  console.log(`Discord conectado como ${client.user.tag}`);
 });
 
-client.on("messageCreate", msg => {
+client.on("messageCreate", (msg) => {
   if (msg.author.bot) return;
-
-  if (msg.mentions.has(client.user)) {
-    msg.reply("Estou observando tudo 👁️");
-  }
+  if (msg.mentions.has(client.user)) msg.reply("Online 👁️");
 });
 
-// 🔹 SERVIDOR HTTP (OBRIGATÓRIO NO AZURE LINUX)
-const server = http.createServer((req, res) => {
+const PORT = Number(process.env.PORT || 3000);
+http.createServer((req, res) => {
   res.writeHead(200);
-  res.end("Bot online");
+  res.end("ok");
+}).listen(PORT, "0.0.0.0", () => {
+  console.log("HTTP ativo na porta", PORT);
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Servidor HTTP ativo na porta ${PORT}`);
+client.login(process.env.DISCORD_TOKEN).catch(err => {
+  console.error("Falha no login Discord:", err);
 });
-
-// 🔹 LOGIN DO DISCORD
-client.login(process.env.DISCORD_TOKEN);
