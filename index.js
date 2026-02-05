@@ -9,36 +9,95 @@ import {
 } from "discord.js";
 import http from "http";
 
-async function chamarOpenRouter(texto) {
+// =========================
+// 0) SAFETY LOGS (não crashar “silencioso”)
+// =========================
+process.on("unhandledRejection", (e) => console.error("unhandledRejection:", e));
+process.on("uncaughtException", (e) => console.error("uncaughtException:", e));
+
+// =========================
+// 1) OPENROUTER (IA)
+// =========================
+// ✅ Ajustes incluídos:
+// - modelo mais estável por padrão (DeepSeek R1)
+// - fallback automático se o modelo falhar
+// - logs detalhados quando OpenRouter der erro
+// - retorno "IA não retornou resposta" só quando realmente não veio texto
+
+const PRIMARY_MODEL = process.env.OPENROUTER_MODEL || "deepseek/deepseek-r1";
+// Se você quiser insistir na Chimera, coloque na Azure:
+// OPENROUTER_MODEL=tngtech/deepseek-r1t-chimera
+const FALLBACK_MODELS = [
+  "tngtech/deepseek-r1t-chimera",
+  "meta-llama/llama-3.3-70b-instruct"
+];
+
+async function callOpenRouterOnce({ model, messages, temperature = 0.8, max_tokens = 400 }) {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error("Falta OPENROUTER_API_KEY nas variáveis.");
 
   const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${key}`,
+      Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
-      "HTTP-Referer": "https://seuapp.azurewebsites.net", // pode deixar assim mesmo se quiser
-      "X-Title": "Bot RPG Discord"
+      // Esses headers ajudam o OpenRouter a identificar sua app (pode ser qualquer coisa)
+      "HTTP-Referer": process.env.OPENROUTER_REFERER || "https://seuapp.azurewebsites.net",
+      "X-Title": process.env.OPENROUTER_TITLE || "Bot RPG Discord"
     },
     body: JSON.stringify({
-      model: "tngtech/r1t-chimera",
-      messages: [
-        { role: "system", content: "Você é um narrador de RPG para Discord. Responda em PT-BR." },
-        { role: "user", content: texto }
-      ],
-      temperature: 0.8,
-      max_tokens: 400
+      model,
+      messages,
+      temperature,
+      max_tokens
     })
   });
 
-  const data = await r.json();
+  const data = await r.json().catch(() => ({}));
+
+  if (!r.ok) {
+    console.error("❌ OpenRouter HTTP", r.status, "model:", model, "payload:", data);
+    const msg = data?.error?.message || `OpenRouter erro HTTP ${r.status}`;
+    throw new Error(msg);
+  }
+
   const resp = data?.choices?.[0]?.message?.content;
-  return resp || "❌ IA não retornou resposta.";
+  if (!resp) {
+    // Loga o payload pra você ver o que veio (rate limit, overload, etc.)
+    console.error("❌ OpenRouter sem choices/content. model:", model, "payload:", data);
+    throw new Error("OpenRouter não retornou conteúdo");
+  }
+
+  return resp;
+}
+
+async function chamarOpenRouter(texto) {
+  const messages = [
+    { role: "system", content: "Você é um narrador de RPG para Discord. Responda em PT-BR." },
+    { role: "user", content: texto }
+  ];
+
+  // Tenta o modelo principal
+  try {
+    return await callOpenRouterOnce({ model: PRIMARY_MODEL, messages });
+  } catch (e1) {
+    console.error("⚠️ Falha no modelo principal:", PRIMARY_MODEL, e1?.message);
+  }
+
+  // Fallbacks
+  for (const model of FALLBACK_MODELS) {
+    try {
+      return await callOpenRouterOnce({ model, messages });
+    } catch (e2) {
+      console.error("⚠️ Falha no fallback:", model, e2?.message);
+    }
+  }
+
+  return "❌ IA não retornou resposta (modelos indisponíveis/limite).";
 }
 
 // =========================
-// 1) CONFIG
+// 2) CONFIG
 // =========================
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
@@ -55,40 +114,46 @@ const client = new Client({
 });
 
 // =========================
-// 2) KEEP-ALIVE HTTP (Azure Linux)
+// 3) KEEP-ALIVE HTTP (Azure Linux)
 // =========================
 const PORT = Number(process.env.PORT || 3000);
-http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end("ok");
-}).listen(PORT, "0.0.0.0", () => {
-  console.log("HTTP ativo na porta", PORT);
-});
+http
+  .createServer((req, res) => {
+    res.writeHead(200);
+    res.end("ok");
+  })
+  .listen(PORT, "0.0.0.0", () => {
+    console.log("HTTP ativo na porta", PORT);
+  });
 
 // =========================
-// 3) SLASH COMMANDS (GLOBAL)
+// 4) SLASH COMMANDS (GLOBAL)
 // =========================
 const commands = [
-  new SlashCommandBuilder()
-    .setName("ping")
-    .setDescription("Teste de latência e status do bot."),
+  new SlashCommandBuilder().setName("ping").setDescription("Teste de latência e status do bot."),
 
-  new SlashCommandBuilder()
-    .setName("ajuda")
-    .setDescription("Mostra os comandos disponíveis."),
+  new SlashCommandBuilder().setName("ajuda").setDescription("Mostra os comandos disponíveis."),
 
+  new SlashCommandBuilder().setName("status").setDescription("Mostra informações do bot (uptime, servidores, etc.)."),
+
+  // ✅ NOVO: /narrar (recomendado, mais confiável que prefix)
   new SlashCommandBuilder()
-    .setName("status")
-    .setDescription("Mostra informações do bot (uptime, servidores, etc.)."),
+    .setName("narrar")
+    .setDescription("Faz a IA narrar/continuar uma cena.")
+    .addStringOption(opt =>
+      opt.setName("texto").setDescription("O que você quer que o narrador faça/continue.").setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("admin")
     .setDescription("Comandos administrativos.")
     .addSubcommand(sc =>
-      sc.setName("limpar")
+      sc
+        .setName("limpar")
         .setDescription("Apaga mensagens do canal (até 100).")
         .addIntegerOption(opt =>
-          opt.setName("quantidade")
+          opt
+            .setName("quantidade")
             .setDescription("Quantidade de mensagens para apagar (1 a 100).")
             .setMinValue(1)
             .setMaxValue(100)
@@ -96,26 +161,14 @@ const commands = [
         )
     )
     .addSubcommand(sc =>
-      sc.setName("say")
+      sc
+        .setName("say")
         .setDescription("Faz o bot enviar uma mensagem.")
-        .addStringOption(opt =>
-          opt.setName("texto")
-            .setDescription("Texto que o bot vai enviar.")
-            .setRequired(true)
-        )
+        .addStringOption(opt => opt.setName("texto").setDescription("Texto que o bot vai enviar.").setRequired(true))
     )
-    .addSubcommand(sc =>
-      sc.setName("lock")
-        .setDescription("Trava o canal para @everyone (impede enviar mensagens).")
-    )
-    .addSubcommand(sc =>
-      sc.setName("unlock")
-        .setDescription("Destrava o canal para @everyone (permite enviar mensagens).")
-    )
-    .addSubcommand(sc =>
-      sc.setName("permissao")
-        .setDescription("Mostra permissões do bot neste canal.")
-    )
+    .addSubcommand(sc => sc.setName("lock").setDescription("Trava o canal para @everyone (impede enviar mensagens)."))
+    .addSubcommand(sc => sc.setName("unlock").setDescription("Destrava o canal para @everyone (permite enviar mensagens)."))
+    .addSubcommand(sc => sc.setName("permissao").setDescription("Mostra permissões do bot neste canal."))
 ].map(c => c.toJSON());
 
 async function registerGlobalCommands() {
@@ -124,11 +177,15 @@ async function registerGlobalCommands() {
   console.log("✅ Slash commands globais registrados.");
 }
 
-client.on("messageCreate", async (message) => {
+// =========================
+// 5) PREFIX COMMAND (!narrar) - opcional
+// =========================
+client.on("messageCreate", async message => {
   if (message.author.bot) return;
 
   if (message.content.startsWith("!narrar ")) {
-    const texto = message.content.slice("!narrar ".length);
+    const texto = message.content.slice("!narrar ".length).trim();
+    if (!texto) return;
 
     try {
       await message.channel.send("🧠 Pensando...");
@@ -145,7 +202,7 @@ client.on("messageCreate", async (message) => {
 });
 
 // =========================
-// 4) HELPERS
+// 6) HELPERS
 // =========================
 function formatUptime(ms) {
   const totalSec = Math.floor(ms / 1000);
@@ -175,7 +232,7 @@ function requireBotPerm(interaction, perm, msg) {
 }
 
 // =========================
-// 5) EVENTS
+// 7) EVENTS
 // =========================
 client.once("ready", async () => {
   console.log(`🤖 Conectado como ${client.user.tag}`);
@@ -186,7 +243,7 @@ client.once("ready", async () => {
   }
 });
 
-client.on("interactionCreate", async (interaction) => {
+client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   try {
@@ -204,11 +261,13 @@ client.on("interactionCreate", async (interaction) => {
           "**Comandos:**\n" +
           "• `/ping`\n" +
           "• `/status`\n" +
+          "• `/narrar texto:...`\n" +
           "• `/admin limpar quantidade:1-100`\n" +
           "• `/admin say texto:...`\n" +
           "• `/admin lock`\n" +
           "• `/admin unlock`\n" +
-          "• `/admin permissao`\n",
+          "• `/admin permissao`\n" +
+          "\n**Prefix (opcional):** `!narrar ...`\n",
         ephemeral: true
       });
       return;
@@ -227,6 +286,20 @@ client.on("interactionCreate", async (interaction) => {
           `• Canal: <#${interaction.channelId}>`,
         ephemeral: true
       });
+      return;
+    }
+
+    // ✅ /narrar (IA)
+    if (interaction.commandName === "narrar") {
+      const texto = interaction.options.getString("texto", true);
+
+      // evita timeout do Discord (a IA pode demorar)
+      await interaction.deferReply();
+
+      const resposta = await chamarOpenRouter(texto);
+      const out = resposta.length > 1900 ? resposta.slice(0, 1900) + "…" : resposta;
+
+      await interaction.editReply(out);
       return;
     }
 
@@ -254,18 +327,18 @@ client.on("interactionCreate", async (interaction) => {
 
       // /admin limpar
       if (sub === "limpar") {
-        if (!requireUserPerm(interaction, PermissionsBitField.Flags.ManageMessages, "❌ Você precisa de **Gerenciar Mensagens**.")) return;
-        if (!requireBotPerm(interaction, PermissionsBitField.Flags.ManageMessages, "❌ Eu preciso de **Gerenciar Mensagens**.")) return;
+        if (!requireUserPerm(interaction, PermissionsBitField.Flags.ManageMessages, "❌ Você precisa de **Gerenciar Mensagens**."))
+          return;
+        if (!requireBotPerm(interaction, PermissionsBitField.Flags.ManageMessages, "❌ Eu preciso de **Gerenciar Mensagens**."))
+          return;
 
         const qtd = interaction.options.getInteger("quantidade", true);
 
-        // Defer para evitar timeout
         await interaction.deferReply({ ephemeral: true });
 
         const fetched = await interaction.channel.messages.fetch({ limit: qtd });
         const deletable = fetched.filter(m => !m.pinned);
 
-        // bulkDelete não apaga mensagens muito antigas (limitação do Discord)
         const deleted = await interaction.channel.bulkDelete(deletable, true);
 
         await interaction.editReply(`🧹 Apaguei **${deleted.size}** mensagens (ignorando fixadas/antigas).`);
@@ -274,8 +347,10 @@ client.on("interactionCreate", async (interaction) => {
 
       // /admin say
       if (sub === "say") {
-        if (!requireUserPerm(interaction, PermissionsBitField.Flags.ManageGuild, "❌ Você precisa de **Gerenciar Servidor**.")) return;
-        if (!requireBotPerm(interaction, PermissionsBitField.Flags.SendMessages, "❌ Eu não tenho permissão para enviar mensagens aqui.")) return;
+        if (!requireUserPerm(interaction, PermissionsBitField.Flags.ManageGuild, "❌ Você precisa de **Gerenciar Servidor**."))
+          return;
+        if (!requireBotPerm(interaction, PermissionsBitField.Flags.SendMessages, "❌ Eu não tenho permissão para enviar mensagens aqui."))
+          return;
 
         const texto = interaction.options.getString("texto", true);
         await interaction.reply({ content: "✅ Enviado.", ephemeral: true });
@@ -285,8 +360,10 @@ client.on("interactionCreate", async (interaction) => {
 
       // /admin lock / unlock
       if (sub === "lock" || sub === "unlock") {
-        if (!requireUserPerm(interaction, PermissionsBitField.Flags.ManageChannels, "❌ Você precisa de **Gerenciar Canais**.")) return;
-        if (!requireBotPerm(interaction, PermissionsBitField.Flags.ManageChannels, "❌ Eu preciso de **Gerenciar Canais**.")) return;
+        if (!requireUserPerm(interaction, PermissionsBitField.Flags.ManageChannels, "❌ Você precisa de **Gerenciar Canais**."))
+          return;
+        if (!requireBotPerm(interaction, PermissionsBitField.Flags.ManageChannels, "❌ Eu preciso de **Gerenciar Canais**."))
+          return;
 
         if (interaction.channel.type !== ChannelType.GuildText) {
           return interaction.reply({ content: "❌ Esse comando só funciona em canal de texto.", ephemeral: true });
@@ -304,11 +381,9 @@ client.on("interactionCreate", async (interaction) => {
         return;
       }
 
-      // fallback
       await interaction.reply({ content: "Subcomando não reconhecido.", ephemeral: true });
       return;
     }
-
   } catch (err) {
     console.error("Erro no command:", err);
     if (interaction.deferred || interaction.replied) {
@@ -320,7 +395,8 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // (Opcional) Ler tudo e só reagir quando marcado — por enquanto só “observa”
-client.on("messageCreate", (msg) => {
+// ✅ Mantém só um listener. (antes você tinha dois messageCreate; removemos o duplicado)
+client.on("messageCreate", msg => {
   if (msg.author.bot) return;
   // Aqui depois vamos registrar memória por campanha, logs, etc.
   // Por enquanto, não faz nada automático pra não virar spam.
