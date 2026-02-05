@@ -1,9 +1,10 @@
+// admin.js
 import { PermissionsBitField, ChannelType } from "discord.js";
 
 function requireUserPerm(interaction, perm, msg) {
   const memberPerms = interaction.memberPermissions;
   if (!memberPerms || !memberPerms.has(perm)) {
-    interaction.reply({ content: msg, ephemeral: true });
+    interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
     return false;
   }
   return true;
@@ -13,7 +14,7 @@ function requireBotPerm(interaction, perm, msg) {
   const me = interaction.guild?.members?.me;
   const botPerms = interaction.channel?.permissionsFor(me);
   if (!botPerms || !botPerms.has(perm)) {
-    interaction.reply({ content: msg, ephemeral: true });
+    interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
     return false;
   }
   return true;
@@ -22,10 +23,13 @@ function requireBotPerm(interaction, perm, msg) {
 export async function handleAdmin(interaction) {
   const sub = interaction.options.getSubcommand();
 
+  // /admin permissao
   if (sub === "permissao") {
     const me = interaction.guild?.members?.me;
     const perms = interaction.channel?.permissionsFor(me);
-    if (!perms) return interaction.reply({ content: "Não consegui ler permissões aqui.", ephemeral: true });
+    if (!perms) {
+      return interaction.reply({ content: "Não consegui ler permissões aqui.", ephemeral: true });
+    }
 
     return interaction.reply({
       content:
@@ -38,20 +42,25 @@ export async function handleAdmin(interaction) {
     });
   }
 
+  // /admin limpar
   if (sub === "limpar") {
     if (!requireUserPerm(interaction, PermissionsBitField.Flags.ManageMessages, "❌ Você precisa de **Gerenciar Mensagens**.")) return;
     if (!requireBotPerm(interaction, PermissionsBitField.Flags.ManageMessages, "❌ Eu preciso de **Gerenciar Mensagens**.")) return;
 
+    // NOME DO OPTION: "quantidade" (igual você usou no builder)
     const qtd = interaction.options.getInteger("quantidade", true);
+
     await interaction.deferReply({ ephemeral: true });
 
     const fetched = await interaction.channel.messages.fetch({ limit: qtd });
     const deletable = fetched.filter(m => !m.pinned);
+
     const deleted = await interaction.channel.bulkDelete(deletable, true);
 
     return interaction.editReply(`🧹 Apaguei **${deleted.size}** mensagens (ignorando fixadas/antigas).`);
   }
 
+  // /admin say
   if (sub === "say") {
     if (!requireUserPerm(interaction, PermissionsBitField.Flags.ManageGuild, "❌ Você precisa de **Gerenciar Servidor**.")) return;
     if (!requireBotPerm(interaction, PermissionsBitField.Flags.SendMessages, "❌ Eu não tenho permissão para enviar mensagens aqui.")) return;
@@ -62,6 +71,7 @@ export async function handleAdmin(interaction) {
     return;
   }
 
+  // /admin lock / unlock
   if (sub === "lock" || sub === "unlock") {
     if (!requireUserPerm(interaction, PermissionsBitField.Flags.ManageChannels, "❌ Você precisa de **Gerenciar Canais**.")) return;
     if (!requireBotPerm(interaction, PermissionsBitField.Flags.ManageChannels, "❌ Eu preciso de **Gerenciar Canais**.")) return;
@@ -71,7 +81,9 @@ export async function handleAdmin(interaction) {
     }
 
     const allow = sub === "unlock";
-    await interaction.channel.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: allow });
+    await interaction.channel.permissionOverwrites.edit(interaction.guild.roles.everyone, {
+      SendMessages: allow
+    });
 
     return interaction.reply({
       content: allow ? "🔓 Canal destravado para @everyone." : "🔒 Canal travado para @everyone.",
@@ -80,30 +92,4 @@ export async function handleAdmin(interaction) {
   }
 
   return interaction.reply({ content: "Subcomando não reconhecido.", ephemeral: true });
-}
-
-export async function handleAdmin(interaction) {
-  const sub = interaction.options.getSubcommand();
-
-  if (sub === "say") {
-    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) {
-      return interaction.reply({ content: "❌ Precisa de **Gerenciar Servidor**.", ephemeral: true });
-    }
-    const texto = interaction.options.getString("texto", true);
-    await interaction.reply({ content: "✅ Enviado.", ephemeral: true });
-    return interaction.channel.send(texto);
-  }
-
-  if (sub === "limpar") {
-    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) {
-      return interaction.reply({ content: "❌ Precisa de **Gerenciar Mensagens**.", ephemeral: true });
-    }
-    const qtd = interaction.options.getInteger("qtd", true);
-    await interaction.deferReply({ ephemeral: true });
-    const fetched = await interaction.channel.messages.fetch({ limit: qtd });
-    const deleted = await interaction.channel.bulkDelete(fetched, true);
-    return interaction.editReply(`🧹 Apaguei **${deleted.size}** mensagens.`);
-  }
-
-  return interaction.reply({ content: "Subcomando não implementado.", ephemeral: true });
 }
