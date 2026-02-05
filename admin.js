@@ -82,8 +82,6 @@ export async function handleAdmin(interaction) {
   return interaction.reply({ content: "Subcomando não reconhecido.", ephemeral: true });
 }
 
-import { PermissionsBitField } from "discord.js";
-
 export async function handleAdmin(interaction) {
   const sub = interaction.options.getSubcommand();
 
