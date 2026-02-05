@@ -9,6 +9,34 @@ import {
 } from "discord.js";
 import http from "http";
 
+async function chamarOpenRouter(texto) {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) throw new Error("Falta OPENROUTER_API_KEY nas variáveis.");
+
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${key}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://seuapp.azurewebsites.net", // pode deixar assim mesmo se quiser
+      "X-Title": "Bot RPG Discord"
+    },
+    body: JSON.stringify({
+      model: "tngtech/r1t-chimera",
+      messages: [
+        { role: "system", content: "Você é um narrador de RPG para Discord. Responda em PT-BR." },
+        { role: "user", content: texto }
+      ],
+      temperature: 0.8,
+      max_tokens: 400
+    })
+  });
+
+  const data = await r.json();
+  const resp = data?.choices?.[0]?.message?.content;
+  return resp || "❌ IA não retornou resposta.";
+}
+
 // =========================
 // 1) CONFIG
 // =========================
