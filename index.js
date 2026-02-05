@@ -15,8 +15,8 @@ import http from "http";
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 
-if (!TOKEN) throw new Error("Falta DISCORD_TOKEN nas variáveis de ambiente.");
-if (!CLIENT_ID) throw new Error("Falta DISCORD_CLIENT_ID nas variáveis de ambiente.");
+if (!TOKEN) console.error("Falta DISCORD_TOKEN nas variáveis de ambiente.");
+if (!CLIENT_ID) console.error("Falta DISCORD_CLIENT_ID nas variáveis de ambiente.");
 
 const client = new Client({
   intents: [
@@ -278,4 +278,8 @@ client.on("messageCreate", (msg) => {
   // Por enquanto, não faz nada automático pra não virar spam.
 });
 
-client.login(TOKEN);
+if (TOKEN) {
+  client.login(TOKEN);
+} else {
+  console.error("Sem DISCORD_TOKEN, não vou conectar no Discord.");
+}
