@@ -1,90 +1,87 @@
-const OR_KEY = process.env.OPENROUTER_API_KEY;
-const OR_REFERER = process.env.OPENROUTER_REFERER || "https://seuapp.azurewebsites.net";
-const OR_TITLE = process.env.OPENROUTER_TITLE || "Bot RPG Discord";
+const OR_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// Melhor “pra agora” (saldo 0): modelos leves :free, com fallback
-let CURRENT_MODEL = process.env.OPENROUTER_MODEL || "meta-llama/llama-3.2-3b-instruct:free";
-const FALLBACK_MODELS = [
-  "google/gemma-3-4b:free",
-  "qwen/qwen3-4b:free",
-  "liquid/lfm-2.5-1.2b-instruct:free"
-];
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-export function getModel() {
-  return CURRENT_MODEL;
-}
-
-export function setModel(name) {
-  CURRENT_MODEL = String(name || "").trim() || CURRENT_MODEL;
-}
-
-async function callOpenRouter({ model, messages, temperature = 0.7, max_tokens = 220 }) {
-  if (!OR_KEY) throw new Error("OPENROUTER_API_KEY não configurada (Azure).");
-
+async function fetchWithTimeout(url, options, timeoutMs = 25000) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25_000);
-
+  const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${OR_KEY}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": OR_REFERER,
-        "X-Title": OR_TITLE
-      },
-      body: JSON.stringify({ model, messages, temperature, max_tokens })
-    });
-
-    const data = await r.json().catch(() => ({}));
-
-    if (!r.ok) {
-      const msg = data?.error?.message || data?.message || "Erro desconhecido";
-      console.error("❌ OpenRouter erro:", r.status, "model:", model, data);
-      throw new Error(`OpenRouter ${r.status}: ${msg}`);
-    }
-
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) {
-      console.error("❌ OpenRouter vazio. model:", model, data);
-      throw new Error("OpenRouter respondeu vazio (modelo ocupado/limitado).");
-    }
-
-    return content;
-  } catch (err) {
-    if (err?.name === "AbortError") throw new Error("Timeout: a IA demorou demais.");
-    throw err;
+    const r = await fetch(url, { ...options, signal: controller.signal });
+    return r;
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(t);
   }
 }
 
-export async function narrar(texto) {
-  const messages = [
-    { role: "system", content: "Você é um narrador de RPG para Discord. Responda em PT-BR, direto e vívido." },
-    { role: "user", content: texto }
-  ];
+// Modelos: coloque 1 “principal” + fallback.
+// Os FREE podem falhar por limite. Eu deixei um mix.
+const MODEL_FALLBACKS = [
+  "google/gemma-3-12b",          // geralmente bom custo/benefício
+  "mistralai/mistral-small-3.1", // bom
+  "meta-llama/llama-3.3-70b-instruct", // pesado, pode falhar (depende)
+  "tngtech/r1t-chimera",         // free, mas vive em limite
+];
 
-  const models = [CURRENT_MODEL, ...FALLBACK_MODELS];
-  let lastError = null;
+export async function chat({ system, user, temperature = 0.8, max_tokens = 450 }) {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) throw new Error("Falta OPENROUTER_API_KEY nas variáveis.");
 
-  for (const model of models) {
+  const siteUrl = process.env.OPENROUTER_SITE_URL || "https://seuapp.azurewebsites.net";
+  const appName = process.env.OPENROUTER_APP_NAME || "Mestre Kise";
+
+  let lastErr = null;
+
+  for (const model of MODEL_FALLBACKS) {
     try {
-      const resp = await callOpenRouter({ model, messages, temperature: 0.7, max_tokens: 220 });
-      return { ok: true, model, text: resp };
+      const r = await fetchWithTimeout(OR_URL, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${key}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": siteUrl,
+          "X-Title": appName,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          temperature,
+          max_tokens,
+        })
+      }, 25000);
+
+      const raw = await r.text();
+      let data = null;
+      try { data = JSON.parse(raw); } catch { data = { _raw: raw }; }
+
+      if (!r.ok) {
+        // 429/503 etc
+        lastErr = new Error(`OpenRouter erro ${r.status}: ${data?.error?.message || raw}`);
+        // espera um pouco e tenta próximo modelo
+        await sleep(600);
+        continue;
+      }
+
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content || !content.trim()) {
+        lastErr = new Error(`Sem conteúdo do modelo ${model}.`);
+        await sleep(300);
+        continue;
+      }
+
+      return { ok: true, model, content };
     } catch (e) {
-      lastError = e;
-      console.error("⚠️ Falha no modelo:", model, e?.message);
+      lastErr = e;
+      await sleep(400);
     }
   }
 
   return {
     ok: false,
     model: null,
-    text:
-      "❌ IA não respondeu.\n" +
-      "Motivo provável: **saldo 0**, limite, ou modelo indisponível.\n" +
-      `Erro: **${String(lastError?.message || lastError)}**`
+    content: "❌ IA não retornou resposta (modelos indisponíveis/limite).",
+    error: String(lastErr?.message || lastErr || "erro desconhecido"),
   };
 }
