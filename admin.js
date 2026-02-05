@@ -81,3 +81,31 @@ export async function handleAdmin(interaction) {
 
   return interaction.reply({ content: "Subcomando não reconhecido.", ephemeral: true });
 }
+
+import { PermissionsBitField } from "discord.js";
+
+export async function handleAdmin(interaction) {
+  const sub = interaction.options.getSubcommand();
+
+  if (sub === "say") {
+    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) {
+      return interaction.reply({ content: "❌ Precisa de **Gerenciar Servidor**.", ephemeral: true });
+    }
+    const texto = interaction.options.getString("texto", true);
+    await interaction.reply({ content: "✅ Enviado.", ephemeral: true });
+    return interaction.channel.send(texto);
+  }
+
+  if (sub === "limpar") {
+    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) {
+      return interaction.reply({ content: "❌ Precisa de **Gerenciar Mensagens**.", ephemeral: true });
+    }
+    const qtd = interaction.options.getInteger("qtd", true);
+    await interaction.deferReply({ ephemeral: true });
+    const fetched = await interaction.channel.messages.fetch({ limit: qtd });
+    const deleted = await interaction.channel.bulkDelete(fetched, true);
+    return interaction.editReply(`🧹 Apaguei **${deleted.size}** mensagens.`);
+  }
+
+  return interaction.reply({ content: "Subcomando não implementado.", ephemeral: true });
+}
