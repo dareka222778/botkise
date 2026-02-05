@@ -124,6 +124,26 @@ async function registerGlobalCommands() {
   console.log("✅ Slash commands globais registrados.");
 }
 
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+
+  if (message.content.startsWith("!narrar ")) {
+    const texto = message.content.slice("!narrar ".length);
+
+    try {
+      await message.channel.send("🧠 Pensando...");
+      const resposta = await chamarOpenRouter(texto);
+
+      // Discord tem limite ~2000 chars por mensagem
+      const out = resposta.length > 1900 ? resposta.slice(0, 1900) + "…" : resposta;
+      await message.channel.send(out);
+    } catch (e) {
+      console.error(e);
+      await message.channel.send("❌ Erro ao chamar a IA.");
+    }
+  }
+});
+
 // =========================
 // 4) HELPERS
 // =========================
