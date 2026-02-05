@@ -1,61 +1,72 @@
 import { Client, GatewayIntentBits } from "discord.js";
 import http from "http";
-import { setSafetyLogs } from "./utils.js";
-import { registerGlobalCommands, handleSlash } from "./slash.js";
-import { handlePrefix } from "./prefix.js";
 
-setSafetyLogs();
+import { makeContext } from "./context.js";
+import * as storage from "./storage.js";
+import * as openrouter from "./openrouter.js";
 
-// ENV
+import * as slash from "./slash.js";
+import * as prefix from "./prefix.js";
+
+import * as embeds from "./embeds.js";
+import * as cooldown from "./cooldown.js";
+
 const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
-
-if (!TOKEN) console.error("Falta DISCORD_TOKEN nas variáveis.");
-if (!CLIENT_ID) console.error("Falta DISCORD_CLIENT_ID nas variáveis.");
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
-// Keep-alive HTTP (Azure)
+// Keep-alive (Azure)
 const PORT = Number(process.env.PORT || 3000);
 http.createServer((req, res) => {
   res.writeHead(200);
   res.end("ok");
 }).listen(PORT, "0.0.0.0", () => console.log("HTTP ativo na porta", PORT));
 
-// Ready
+// Boot
+const db = await storage.initStorage();
+const ctx = makeContext({ client, storage: db, embeds, cooldown, openrouter });
+
 client.once("ready", async () => {
   console.log(`🤖 Conectado como ${client.user.tag}`);
+
   try {
-    await registerGlobalCommands({ token: TOKEN, clientId: CLIENT_ID });
+    await slash.registerGlobalCommands();
   } catch (e) {
-    console.error("❌ Falha registrando comandos globais:", e);
+    console.error("❌ Falha registrando slash:", e);
   }
 });
 
-// Slash commands
+// Slash commands + Buttons/Select menus
 client.on("interactionCreate", async (interaction) => {
   try {
-    await handleSlash(interaction, client);
+    await slash.handleInteraction(interaction, ctx);
   } catch (e) {
-    console.error("Erro slash:", e);
-    const msg = `❌ ${String(e?.message || e)}`.slice(0, 1900);
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(msg);
-    } else {
-      await interaction.reply({ content: msg, ephemeral: true });
+    console.error("interaction error:", e);
+    if (interaction.isRepliable()) {
+      const msg = "❌ Erro ao executar.";
+      if (interaction.deferred || interaction.replied) await interaction.editReply(msg);
+      else await interaction.reply({ content: msg, ephemeral: true });
     }
   }
 });
 
-// Prefix commands
+// Prefix commands (!narrar etc)
 client.on("messageCreate", async (message) => {
   try {
-    await handlePrefix(message);
+    await prefix.handleMessage(message, ctx);
   } catch (e) {
-    console.error("Erro prefix:", e);
+    console.error("message error:", e);
   }
 });
 
-if (TOKEN) client.login(TOKEN);
+if (!TOKEN) {
+  console.error("Sem DISCORD_TOKEN.");
+} else {
+  client.login(TOKEN);
+}
